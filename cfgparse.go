@@ -17,7 +17,7 @@ var (
 	keyValueRegexp = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
 )
 
-var allowedTypes = []string{"ini", "cfg"}
+var allowedTypes = []string{".ini", ".cfg"}
 
 type section struct {
 	name string
@@ -62,10 +62,10 @@ func getFileType(filename string) (string, error) {
 
 func (c* CfgParser)setDelimitor() {
 	switch c.fileType {
-	case "ini":
+	case ".ini":
 		c.delimeter = "="
 		break
-	case "cfg":
+	case ".cfg":
 		c.delimeter = ":"
 		break
 	default:
