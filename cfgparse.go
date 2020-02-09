@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,7 +17,10 @@ var (
 	keyValueRegexp = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
 )
 
+var allowedTypes = []string{"ini", "cfg"}
+
 type section struct {
+	name string
 	items map[string]string
 }
 
@@ -35,18 +39,75 @@ func New() *CfgParser {
 }
 
 
-func (c* CfgParser) ReadFile(filePath string) error {
-	if len(filePath) == 0 {
-		err := errors.New("File Name cannot be Empty")
+func isValidType(fileType string) bool {
+	for _, value := range allowedTypes {
+		if value == fileType {
+			return true
+		}
+	}
+	return false
+}
+
+
+func getFileType(filename string) (string, error) {
+	fileType := filepath.Ext(filename)
+	if ! isValidType(fileType) {
+		errMessage := "File type not supported. Supported types (" + strings.Join(allowedTypes, " ") + ")"
+		err := errors.New(errMessage)
+		return fileType, err
+	}
+	return fileType, nil
+}
+
+
+func (c* CfgParser)setDelimitor() {
+	switch c.fileType {
+	case "ini":
+		c.delimeter = "="
+		break
+	case "cfg":
+		c.delimeter = ":"
+		break
+	default:
+		c.delimeter = ":"
+	}
+}
+
+
+func (c* CfgParser) ReadFile(filename string) error {
+	if len(filename) == 0 {
+		err := errors.New("File name cannot be empty")
 		return err
 	}
-	cfgFile, err := os.Open(filePath)
+	fileType, err := getFileType(filename)
+	if err != nil {
+		return err
+	}
+	c.fileType = fileType
+	c.setDelimitor()
+	cfgFile, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
 	c.Parse(cfgFile)
 	return nil
 }
+
+
+func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int)(string, string) {
+	defer func() {
+		err := recover()
+		if err != nil {
+			errMessage := fmt.Sprintf("Config file format error at line no %d. Please format it correctly",lineNo)
+			panic(errMessage)
+		}
+	}()
+	keyValues := strings.Split(sectionValue, sep)
+	key := keyValues[0]
+	value := keyValues[1]
+	return key, value
+}
+
 
 func (c* CfgParser) Parse(cfgFile *os.File) {
 	reader := bufio.NewReader(cfgFile)
@@ -63,30 +124,40 @@ func (c* CfgParser) Parse(cfgFile *os.File) {
 			continue
 		}
 		line := strings.TrimFunc(string(buff), unicode.IsSpace)
+		lineNo++
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
 
 		if isSection(line) {
-			section := sectionHeaderRegexp.FindStringSubmatch(line)[1]
-			fmt.Println("It is a section")
-			fmt.Println(section)
+			sectionHeader := sectionHeaderRegexp.FindStringSubmatch(line)[1]
+			curSection = section{}
+			curSection.name = sectionHeader
+			// TODO: check for dulicate sections
+			c.sections[curSection.name] = curSection
 		} else if isKeyValue(line) {
 			sectionValue := keyValueRegexp.FindStringSubmatch(line)[1]
-			fmt.Println("It is sectionvalue")
-			fmt.Println(sectionValue)
-
+			key, value := getKeyValuefromSectionValue(sectionValue, c.delimeter, lineNo)
+			curSection.items[key] = value
 		}
 	}
-
-
 }
 
 
-func (c* CfgParser) Get(section string, key string) (string, error) {
-	return "", errors.New("hfjh")
-
+func (c* CfgParser) Get(section string, key string) interface{} {
+	sectionValue, ok := c.sections[section]
+	if !ok {
+		errMessage := fmt.Sprintf("No such section %s exists", section)
+		panic(errMessage)
+	}
+	value, ok := sectionValue.items[key]
+	if !ok {
+		errMessage := fmt.Sprintf("No such key %s exists in section %s exists", key, section)
+		panic(errMessage)
+	}
+	return value
 }
+
 
 func isSection(line string) bool {
 	match := sectionHeaderRegexp.MatchString(line)
