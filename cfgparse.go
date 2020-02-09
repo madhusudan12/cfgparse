@@ -21,7 +21,7 @@ var allowedTypes = []string{"ini", "cfg"}
 
 type section struct {
 	name string
-	items map[string]string
+	items map[string]interface{}
 }
 
 
