@@ -115,7 +115,7 @@ func (c* CfgParser) Parse(cfgFile *os.File) {
 	var curSection section
 	var err error
 
-	for err != nil {
+	for err == nil {
 		buff, _, err := reader.ReadLine()
 		if err != nil{
 			break
@@ -128,21 +128,32 @@ func (c* CfgParser) Parse(cfgFile *os.File) {
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-
 		if isSection(line) {
 			sectionHeader := sectionHeaderRegexp.FindStringSubmatch(line)[1]
 			curSection = section{}
 			curSection.name = sectionHeader
+			curSection.items = make(map[string]interface{})
 			// TODO: check for dulicate sections
+			if c.sections == nil {
+				c.sections = make(map[string]section)
+			}
 			c.sections[curSection.name] = curSection
 		} else if isKeyValue(line) {
-			sectionValue := keyValueRegexp.FindStringSubmatch(line)[1]
+			sectionValue := keyValueRegexp.FindStringSubmatch(line)[0]
+			fmt.Println("keyvalue", sectionValue)
 			key, value := getKeyValuefromSectionValue(sectionValue, c.delimeter, lineNo)
 			curSection.items[key] = value
 		}
 	}
 }
 
+func (c* CfgParser) GetAllSections() []string{
+	sections := []string{}
+	for section := range c.sections {
+		sections = append(sections, section)
+	}
+	return sections
+}
 
 func (c* CfgParser) Get(section string, key string) interface{} {
 	sectionValue, ok := c.sections[section]

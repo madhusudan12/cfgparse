@@ -1,13 +1,20 @@
 package cfgparse
 
+import (
+	"testing"
+)
 
-func main() {
-	cfg := New()
-	err := cfg.ReadFile("config.ini")
-	if err!=nil {
-		panic(err)
+
+
+
+func TestCfgParser_ReadFile(t *testing.T) {
+	config := New()
+	err := config.ReadFile("config.ini")
+	if err != nil {
+		panic("Hey error while parsing file")
 	}
-
-
-
+	val := config.Get("default", "username")
+	if val != "madhusudan" {
+		t.Error("unable to get the value", val)
+	}
 }
