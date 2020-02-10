@@ -14,30 +14,28 @@ import (
 
 var (
 	sectionHeaderRegexp = regexp.MustCompile("\\[([^]]+)\\]")
-	keyValueRegexp = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
+	keyValueRegexp      = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
 )
 
 var allowedTypes = []string{".ini", ".cfg"}
 
 type section struct {
-	name string
+	name  string
 	items map[string]interface{}
 }
 
-
 type CfgParser struct {
-	fileType string
-	sections map[string]section
+	fileName  string
+	fileType  string
+	sections  map[string]section
 	delimeter string
-	mutex sync.Mutex
+	mutex     sync.Mutex
 }
-
 
 func New() *CfgParser {
 	cfg := CfgParser{}
 	return &cfg
 }
-
 
 func isValidType(fileType string) bool {
 	for _, value := range allowedTypes {
@@ -48,10 +46,9 @@ func isValidType(fileType string) bool {
 	return false
 }
 
-
 func getFileType(filename string) (string, error) {
 	fileType := filepath.Ext(filename)
-	if ! isValidType(fileType) {
+	if !isValidType(fileType) {
 		errMessage := "File type not supported. Supported types (" + strings.Join(allowedTypes, " ") + ")"
 		err := errors.New(errMessage)
 		return fileType, err
@@ -59,8 +56,7 @@ func getFileType(filename string) (string, error) {
 	return fileType, nil
 }
 
-
-func (c* CfgParser)setDelimitor() {
+func (c *CfgParser) setDelimitor() {
 	switch c.fileType {
 	case ".ini":
 		c.delimeter = "="
@@ -73,19 +69,20 @@ func (c* CfgParser)setDelimitor() {
 	}
 }
 
-
-func (c* CfgParser) ReadFile(filename string) error {
-	if len(filename) == 0 {
-		err := errors.New("File name cannot be empty")
+func (c *CfgParser) ReadFile(fileName string) error {
+	if len(fileName) == 0 {
+		err := errors.New("file name cannot be empty")
 		return err
 	}
-	fileType, err := getFileType(filename)
+	fileType, err := getFileType(fileName)
+	c.fileName = fileName
 	if err != nil {
 		return err
 	}
 	c.fileType = fileType
 	c.setDelimitor()
-	cfgFile, err := os.Open(filename)
+	cfgFile, err := os.Open(fileName)
+	defer cfgFile.Close()
 	if err != nil {
 		return err
 	}
@@ -93,12 +90,11 @@ func (c* CfgParser) ReadFile(filename string) error {
 	return nil
 }
 
-
-func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int)(string, string) {
+func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int) (string, string) {
 	defer func() {
 		err := recover()
 		if err != nil {
-			errMessage := fmt.Sprintf("Config file format error at line no %d. Please format it correctly",lineNo)
+			errMessage := fmt.Sprintf("Config file format error at line no %d. Please format it correctly", lineNo)
 			panic(errMessage)
 		}
 	}()
@@ -108,16 +104,14 @@ func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int)(st
 	return key, value
 }
 
-
-func (c* CfgParser) Parse(cfgFile *os.File) {
+func (c *CfgParser) Parse(cfgFile *os.File) {
 	reader := bufio.NewReader(cfgFile)
 	var lineNo int
 	var curSection section
 	var err error
-
 	for err == nil {
 		buff, _, err := reader.ReadLine()
-		if err != nil{
+		if err != nil {
 			break
 		}
 		if len(buff) == 0 {
@@ -131,23 +125,25 @@ func (c* CfgParser) Parse(cfgFile *os.File) {
 		if isSection(line) {
 			sectionHeader := sectionHeaderRegexp.FindStringSubmatch(line)[1]
 			curSection = section{}
+			if c.isSectionAlreadyExists(sectionHeader) {
+				errMessage := fmt.Sprintf("Parsing Error: Duplicate section occured at line %d", lineNo)
+				panic(errMessage)
+			}
 			curSection.name = sectionHeader
 			curSection.items = make(map[string]interface{})
-			// TODO: check for dulicate sections
 			if c.sections == nil {
 				c.sections = make(map[string]section)
 			}
 			c.sections[curSection.name] = curSection
 		} else if isKeyValue(line) {
 			sectionValue := keyValueRegexp.FindStringSubmatch(line)[0]
-			fmt.Println("keyvalue", sectionValue)
 			key, value := getKeyValuefromSectionValue(sectionValue, c.delimeter, lineNo)
 			curSection.items[key] = value
 		}
 	}
 }
 
-func (c* CfgParser) GetAllSections() []string{
+func (c *CfgParser) GetAllSections() []string {
 	sections := []string{}
 	for section := range c.sections {
 		sections = append(sections, section)
@@ -155,7 +151,16 @@ func (c* CfgParser) GetAllSections() []string{
 	return sections
 }
 
-func (c* CfgParser) Get(section string, key string) interface{} {
+func (c *CfgParser) GetSection(section string) map[string]interface{} {
+	sectionValue, ok := c.sections[section]
+	if !ok {
+		errMessage := fmt.Sprintf("No such section %s exists", section)
+		panic(errMessage)
+	}
+	return sectionValue.items
+}
+
+func (c *CfgParser) Get(section string, key string) interface{} {
 	sectionValue, ok := c.sections[section]
 	if !ok {
 		errMessage := fmt.Sprintf("No such section %s exists", section)
@@ -163,22 +168,112 @@ func (c* CfgParser) Get(section string, key string) interface{} {
 	}
 	value, ok := sectionValue.items[key]
 	if !ok {
-		errMessage := fmt.Sprintf("No such key %s exists in section %s exists", key, section)
+		errMessage := fmt.Sprintf("No such key %s exists in section %s", key, section)
 		panic(errMessage)
 	}
 	return value
 }
 
+func (c *CfgParser) GetString(section string, key string) (string, error) {
+	value := c.Get(section, key)
+	if resValue, ok := value.(string); !ok {
+		return resValue, nil
+	} else {
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		err := errors.New(ErrMessage)
+		return resValue, err
+	}
+}
+
+func (c *CfgParser) GetBool(section string, key string) (bool, error) {
+	value := c.Get(section, key)
+	if resValue, ok := value.(bool); !ok {
+		return resValue, nil
+	} else {
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		err := errors.New(ErrMessage)
+		return resValue, err
+	}
+}
+
+func (c *CfgParser) GetInt(section string, key string) (int64, error) {
+	value := c.Get(section, key)
+	if resValue, ok := value.(int64); !ok {
+		return resValue, nil
+	} else {
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		err := errors.New(ErrMessage)
+		return resValue, err
+	}
+}
+
+func (c *CfgParser) GetFloat(section string, key string) (float64, error) {
+	value := c.Get(section, key)
+	if resValue, ok := value.(float64); !ok {
+		return resValue, nil
+	} else {
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		err := errors.New(ErrMessage)
+		return resValue, err
+	}
+}
+
+func (c *CfgParser) AddSection(sectionName string) error {
+	newSection := section{}
+	if c.isSectionAlreadyExists(sectionName) {
+		errMessage := fmt.Sprintf("Cannot add section %s already exits", sectionName)
+		err := errors.New(errMessage)
+		return err
+	}
+	c.mutex.Lock()
+	newSection.name = sectionName
+	newSection.items = make(map[string]interface{})
+	if c.sections == nil {
+		c.sections = make(map[string]section)
+	}
+	c.sections[newSection.name] = newSection
+	f, err := os.OpenFile(c.fileName, os.O_APPEND|os.O_WRONLY, 0644)
+	defer f.Close()
+	if err != nil {
+		errMesssage := fmt.Sprintf("Somthing went wrong while opening file %s. Check if is opened in other places")
+		err = errors.New(errMesssage)
+		return err
+	}
+	writer := bufio.NewWriter(f)
+	buf := "\n[" + sectionName + "]"
+	_, writerErr := writer.WriteString(buf)
+	if writerErr != nil {
+		errMesssage := fmt.Sprintf("Somthing went wrong while writing into file %s. Check if is opened in other places")
+		err = errors.New(errMesssage)
+		return err
+	}
+	err = writer.Flush()
+	if err != nil {
+		return err
+	}
+	c.mutex.Unlock()
+	return nil
+}
+
+func (c *CfgParser) Set(section string, key string, value string) {
+
+}
 
 func isSection(line string) bool {
 	match := sectionHeaderRegexp.MatchString(line)
 	return match
 }
 
+func (c *CfgParser) isSectionAlreadyExists(sectionName string) bool {
+	for section, _ := range c.sections {
+		if section == sectionName {
+			return true
+		}
+	}
+	return false
+}
 
 func isKeyValue(line string) bool {
 	match := keyValueRegexp.MatchString(line)
 	return match
 }
-
-
