@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +22,7 @@ var allowedTypes = []string{".ini", ".cfg"}
 
 type section struct {
 	name  string
+	filePosition uint64
 	items map[string]interface{}
 }
 
@@ -90,7 +92,7 @@ func (c *CfgParser) ReadFile(fileName string) error {
 	return nil
 }
 
-func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int) (string, string) {
+func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo uint) (string, string) {
 	defer func() {
 		err := recover()
 		if err != nil {
@@ -106,10 +108,11 @@ func getKeyValuefromSectionValue(sectionValue string, sep string, lineNo int) (s
 
 func (c *CfgParser) Parse(cfgFile *os.File) {
 	reader := bufio.NewReader(cfgFile)
-	var lineNo int
+	var lineNo uint
 	var curSection section
-	var err error
-	for err == nil {
+	var filePos uint64
+	var numOfBytes int
+	for {
 		buff, _, err := reader.ReadLine()
 		if err != nil {
 			break
@@ -117,6 +120,8 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 		if len(buff) == 0 {
 			continue
 		}
+		numOfBytes = len(buff)
+		filePos = filePos + uint64(numOfBytes) + 1
 		line := strings.TrimFunc(string(buff), unicode.IsSpace)
 		lineNo++
 		if strings.HasPrefix(line, "#") || line == "" {
@@ -131,6 +136,7 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 			}
 			curSection.name = sectionHeader
 			curSection.items = make(map[string]interface{})
+			curSection.filePosition = filePos
 			if c.sections == nil {
 				c.sections = make(map[string]section)
 			}
@@ -231,19 +237,24 @@ func (c *CfgParser) AddSection(sectionName string) error {
 	if c.sections == nil {
 		c.sections = make(map[string]section)
 	}
-	c.sections[newSection.name] = newSection
 	f, err := os.OpenFile(c.fileName, os.O_APPEND|os.O_WRONLY, 0644)
 	defer f.Close()
 	if err != nil {
-		errMesssage := fmt.Sprintf("Somthing went wrong while opening file %s. Check if is opened in other places")
+		errMesssage := fmt.Sprintf("Somthing went wrong while opening file %s. Check if is opened in other places", c.fileName)
 		err = errors.New(errMesssage)
 		return err
 	}
 	writer := bufio.NewWriter(f)
-	buf := "\n[" + sectionName + "]"
-	_, writerErr := writer.WriteString(buf)
+	buff := "\n[" + sectionName + "]"
+	filePostion, err := f.Seek(2, 0)
+	if err != nil {
+		panic("Something went wrong while accessing file")
+	}
+	newSection.filePosition = uint64(filePostion) + uint64(len(buff)) + 1
+	c.sections[newSection.name] = newSection
+	_, writerErr := writer.WriteString(buff)
 	if writerErr != nil {
-		errMesssage := fmt.Sprintf("Somthing went wrong while writing into file %s. Check if is opened in other places")
+		errMesssage := fmt.Sprintf("Somthing went wrong while writing into file %s. Check if is opened in other places", c.fileName)
 		err = errors.New(errMesssage)
 		return err
 	}
@@ -255,8 +266,58 @@ func (c *CfgParser) AddSection(sectionName string) error {
 	return nil
 }
 
-func (c *CfgParser) Set(section string, key string, value string) {
+func (c *CfgParser) Set(sectionName string, key string, value string) {
+	if !c.isSectionAlreadyExists(sectionName) {
+		err := c.AddSection(sectionName)
+		if err != nil {
+			panic("Error adding section name")
+		}
+	}
+	filePos, err := c.getSectionPos(sectionName)
+	f, err := os.OpenFile(c.fileName, os.O_RDONLY, 0644)
+	if err != nil {
+		panic("Error accessing the config file")
+	}
+	fileStat, err := f.Stat()
+	if err != nil {
+		panic("Error accessing the config file")
+	}
+	fileSize := fileStat.Size()
+	sectionPositon, err := f.Seek(int64(filePos), 0)
+	if err != nil {
+		panic("Error accessing the config file")
+	}
+	extraFileSize := fileSize - sectionPositon + 1
+	buffBytes := make([]byte, extraFileSize)
+	_ , err = f.ReadAt(buffBytes, sectionPositon)
+	if err!= io.EOF {
+		errMessage := fmt.Sprintf("Error Reading the config file %v", err)
+		panic(errMessage)
+	}
+	remainingSlice := string(buffBytes)[:len(buffBytes)-1]
+	keyValueToWrite := key + c.delimeter + value
+	dataToWrite := keyValueToWrite + "\n" + remainingSlice
+	bytesToWrite := []byte(dataToWrite)
+	f.Close()
+	f, err = os.OpenFile(c.fileName, os.O_WRONLY, 0644)
+	if err != nil {
+		panic("Error accessing the config file")
+	}
+	_ , wErr := f.WriteAt(bytesToWrite, sectionPositon)
+	if wErr != nil {
+		errMsg := fmt.Sprintf("Error Writing to config file %v", wErr)
+		panic(errMsg)
+	}
+}
 
+
+func (c *CfgParser) getSectionPos(sectionName string) (uint64, error){
+	for sec, _ := range c.sections {
+		if sec == sectionName {
+			return c.sections[sectionName].filePosition, nil
+		}
+	}
+	return 0, errors.New("No section exists")
 }
 
 func isSection(line string) bool {
