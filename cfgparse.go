@@ -22,7 +22,7 @@ var allowedTypes = []string{".ini", ".cfg"}
 
 type section struct {
 	name  string
-	filePosition uint64
+	filePosition int64
 	items map[string]interface{}
 }
 
@@ -110,7 +110,7 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 	reader := bufio.NewReader(cfgFile)
 	var lineNo uint
 	var curSection section
-	var filePos uint64
+	var filePos int64
 	var numOfBytes int
 	for {
 		buff, _, err := reader.ReadLine()
@@ -121,7 +121,7 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 			continue
 		}
 		numOfBytes = len(buff)
-		filePos = filePos + uint64(numOfBytes) + 1
+		filePos = filePos + int64(numOfBytes) + 1
 		line := strings.TrimFunc(string(buff), unicode.IsSpace)
 		lineNo++
 		if strings.HasPrefix(line, "#") || line == "" {
@@ -131,7 +131,7 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 			sectionHeader := sectionHeaderRegexp.FindStringSubmatch(line)[1]
 			curSection = section{}
 			if c.isSectionAlreadyExists(sectionHeader) {
-				errMessage := fmt.Sprintf("Parsing Error: Duplicate section occured at line %d", lineNo)
+				errMessage := fmt.Sprintf("Parsing Error: Duplicate section %s occured at line %d",sectionHeader, lineNo)
 				panic(errMessage)
 			}
 			curSection.name = sectionHeader
@@ -250,7 +250,7 @@ func (c *CfgParser) AddSection(sectionName string) error {
 	if err != nil {
 		panic("Something went wrong while accessing file")
 	}
-	newSection.filePosition = uint64(filePostion) + uint64(len(buff)) + 1
+	newSection.filePosition = filePostion + int64(len(buff)) + 1
 	c.sections[newSection.name] = newSection
 	_, writerErr := writer.WriteString(buff)
 	if writerErr != nil {
@@ -266,6 +266,8 @@ func (c *CfgParser) AddSection(sectionName string) error {
 	return nil
 }
 
+// TODO: Apply locks while writing also load data in memory after writing into file, along with updating the file positions
+// TODO: find the best method to update filepositions ( reload the entire file , change all file positions greater than the current writing section
 func (c *CfgParser) Set(sectionName string, key string, value string) {
 	if !c.isSectionAlreadyExists(sectionName) {
 		err := c.AddSection(sectionName)
@@ -274,22 +276,23 @@ func (c *CfgParser) Set(sectionName string, key string, value string) {
 		}
 	}
 	filePos, err := c.getSectionPos(sectionName)
-	f, err := os.OpenFile(c.fileName, os.O_RDONLY, 0644)
+	fReader, err := os.OpenFile(c.fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		panic("Error accessing the config file")
 	}
-	fileStat, err := f.Stat()
+	defer fReader.Close()
+	fileStat, err := fReader.Stat()
 	if err != nil {
 		panic("Error accessing the config file")
 	}
 	fileSize := fileStat.Size()
-	sectionPositon, err := f.Seek(int64(filePos), 0)
+	sectionPositon, err := fReader.Seek(int64(filePos), 0)
 	if err != nil {
 		panic("Error accessing the config file")
 	}
 	extraFileSize := fileSize - sectionPositon + 1
 	buffBytes := make([]byte, extraFileSize)
-	_ , err = f.ReadAt(buffBytes, sectionPositon)
+	_ , err = fReader.ReadAt(buffBytes, sectionPositon)
 	if err!= io.EOF {
 		errMessage := fmt.Sprintf("Error Reading the config file %v", err)
 		panic(errMessage)
@@ -298,20 +301,35 @@ func (c *CfgParser) Set(sectionName string, key string, value string) {
 	keyValueToWrite := key + c.delimeter + value
 	dataToWrite := keyValueToWrite + "\n" + remainingSlice
 	bytesToWrite := []byte(dataToWrite)
-	f.Close()
-	f, err = os.OpenFile(c.fileName, os.O_WRONLY, 0644)
+	c.mutex.Lock()
+	fWriter, err := os.OpenFile(c.fileName, os.O_WRONLY, 0644)
 	if err != nil {
 		panic("Error accessing the config file")
 	}
-	_ , wErr := f.WriteAt(bytesToWrite, sectionPositon)
+	bytesAdded , wErr := fWriter.WriteAt(bytesToWrite, sectionPositon)
 	if wErr != nil {
 		errMsg := fmt.Sprintf("Error Writing to config file %v", wErr)
 		panic(errMsg)
 	}
+	c.sections[sectionName].items[key] = value
+	fWriter.Close()
+	noOfExtraBytes := bytesAdded - len(remainingSlice)
+	c.reOrderFilePositions(sectionPositon, noOfExtraBytes)
+	c.mutex.Unlock()
 }
 
 
-func (c *CfgParser) getSectionPos(sectionName string) (uint64, error){
+func (c *CfgParser) reOrderFilePositions(sectionPosition int64, bytesAdded int) {
+	for sec, secObj := range c.sections {
+		if secObj.filePosition > sectionPosition {
+			secObj.filePosition = c.sections[sec].filePosition + int64(bytesAdded)
+			c.sections[sec] = secObj
+		}
+	}
+}
+
+
+func (c *CfgParser) getSectionPos(sectionName string) (int64, error){
 	for sec, _ := range c.sections {
 		if sec == sectionName {
 			return c.sections[sectionName].filePosition, nil
