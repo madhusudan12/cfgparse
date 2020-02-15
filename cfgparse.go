@@ -8,22 +8,24 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
 )
 
 var (
-	sectionHeaderRegexp = regexp.MustCompile("\\[([^]]+)\\]")
-	keyValueRegexp      = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
+	sectionRegexp = regexp.MustCompile("\\[([^]]+)\\]")
+	keyValueRegexp = regexp.MustCompile("([^:=\\s][^:=]*)\\s*(?P<vi>[:=])\\s*(.*)$")
+	interpolateRegexp = regexp.MustCompile("%\\(([^)]*)\\)s|.")
 )
-
+const MaxDepth = 10
 var allowedTypes = []string{".ini", ".cfg"}
 
 type section struct {
 	name  string
 	filePosition int64
-	items map[string]interface{}
+	items map[string]string
 }
 
 type CfgParser struct {
@@ -128,14 +130,14 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 			continue
 		}
 		if isSection(line) {
-			sectionHeader := sectionHeaderRegexp.FindStringSubmatch(line)[1]
+			sectionHeader := sectionRegexp.FindStringSubmatch(line)[1]
 			curSection = section{}
 			if c.isSectionAlreadyExists(sectionHeader) {
 				errMessage := fmt.Sprintf("Parsing Error: Duplicate section %s occured at line %d",sectionHeader, lineNo)
 				panic(errMessage)
 			}
 			curSection.name = sectionHeader
-			curSection.items = make(map[string]interface{})
+			curSection.items = make(map[string]string)
 			curSection.filePosition = filePos
 			if c.sections == nil {
 				c.sections = make(map[string]section)
@@ -144,6 +146,12 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 		} else if isKeyValue(line) {
 			sectionValue := keyValueRegexp.FindStringSubmatch(line)[0]
 			key, value := getKeyValuefromSectionValue(sectionValue, c.delimeter, lineNo)
+			pos := strings.Index(";", value)         // Checking for comments
+			if pos > -1 {
+				if v := value[pos-1]; unicode.IsSpace(rune(v)) {
+					value = value[:pos-1]
+				}
+			}
 			curSection.items[key] = value
 		}
 	}
@@ -157,7 +165,7 @@ func (c *CfgParser) GetAllSections() []string {
 	return sections
 }
 
-func (c *CfgParser) GetSection(section string) map[string]interface{} {
+func (c *CfgParser) Items(section string) map[string]string {
 	sectionValue, ok := c.sections[section]
 	if !ok {
 		errMessage := fmt.Sprintf("No such section %s exists", section)
@@ -166,37 +174,26 @@ func (c *CfgParser) GetSection(section string) map[string]interface{} {
 	return sectionValue.items
 }
 
-func (c *CfgParser) Get(section string, key string) interface{} {
-	sectionValue, ok := c.sections[section]
+func (c *CfgParser) Get(sectionName string, key string) string {
+	sectionValue, ok := c.sections[sectionName]
 	if !ok {
-		errMessage := fmt.Sprintf("No such section %s exists", section)
+		errMessage := fmt.Sprintf("No such section %s exists", sectionName)
 		panic(errMessage)
 	}
 	value, ok := sectionValue.items[key]
 	if !ok {
-		errMessage := fmt.Sprintf("No such key %s exists in section %s", key, section)
+		errMessage := fmt.Sprintf("No such key %s exists in section %s", key, sectionName)
 		panic(errMessage)
 	}
-	return value
-}
-
-func (c *CfgParser) GetString(section string, key string) (string, error) {
-	value := c.Get(section, key)
-	if resValue, ok := value.(string); !ok {
-		return resValue, nil
-	} else {
-		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
-		err := errors.New(ErrMessage)
-		return resValue, err
-	}
+	return c.interpolate(sectionName, key, value)
 }
 
 func (c *CfgParser) GetBool(section string, key string) (bool, error) {
 	value := c.Get(section, key)
-	if resValue, ok := value.(bool); !ok {
+	if resValue, err := strconv.ParseBool(value); err != nil {
 		return resValue, nil
 	} else {
-		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type bool", value)
 		err := errors.New(ErrMessage)
 		return resValue, err
 	}
@@ -204,21 +201,21 @@ func (c *CfgParser) GetBool(section string, key string) (bool, error) {
 
 func (c *CfgParser) GetInt(section string, key string) (int64, error) {
 	value := c.Get(section, key)
-	if resValue, ok := value.(int64); !ok {
-		return resValue, nil
+	if resValue, err := strconv.Atoi(value); err != nil {
+		return int64(resValue), nil
 	} else {
-		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type int64", value)
 		err := errors.New(ErrMessage)
-		return resValue, err
+		return int64(resValue), err
 	}
 }
 
 func (c *CfgParser) GetFloat(section string, key string) (float64, error) {
 	value := c.Get(section, key)
-	if resValue, ok := value.(float64); !ok {
+	if resValue, err := strconv.ParseFloat(value, 64); err != nil {
 		return resValue, nil
 	} else {
-		ErrMessage := fmt.Sprintf("Cannot convert %s to type string", value)
+		ErrMessage := fmt.Sprintf("Cannot convert %s to type float64", value)
 		err := errors.New(ErrMessage)
 		return resValue, err
 	}
@@ -233,7 +230,7 @@ func (c *CfgParser) AddSection(sectionName string) error {
 	}
 	c.mutex.Lock()
 	newSection.name = sectionName
-	newSection.items = make(map[string]interface{})
+	newSection.items = make(map[string]string)
 	if c.sections == nil {
 		c.sections = make(map[string]section)
 	}
@@ -328,6 +325,18 @@ func (c *CfgParser) reOrderFilePositions(sectionPosition int64, bytesAdded int) 
 	}
 }
 
+func (c *CfgParser) interpolate(sectionName string, key string, value string) string {
+	for depth := 0; depth < MaxDepth; depth++ {
+		if strings.Contains(value,"%(") {
+			value = interpolateRegexp.ReplaceAllStringFunc(value, func(m string) string {
+				match := interpolateRegexp.FindAllStringSubmatch(m, 1)[0][1]
+				replacement := c.Get(sectionName, match)
+				return replacement
+			})
+		}
+	}
+	return value
+}
 
 func (c *CfgParser) getSectionPos(sectionName string) (int64, error){
 	for sec, _ := range c.sections {
@@ -339,7 +348,7 @@ func (c *CfgParser) getSectionPos(sectionName string) (int64, error){
 }
 
 func isSection(line string) bool {
-	match := sectionHeaderRegexp.MatchString(line)
+	match := sectionRegexp.MatchString(line)
 	return match
 }
 
