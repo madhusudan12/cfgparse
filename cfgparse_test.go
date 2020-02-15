@@ -17,6 +17,19 @@ func TestCfgParser_ReadFile(t *testing.T) {
 }
 
 
+func TestCfgParser_Get(t *testing.T) {
+	config := New()
+	err := config.ReadFile("config.ini")
+	if err != nil {
+		panic("Hey error while parsing file")
+	}
+	val := config.Get("newsection", "abc")
+	if val != "newvalue" {
+		t.Error("unable to get the value", val)
+	}
+}
+
+
 func TestCfgParser_AddSection(t *testing.T) {
 	config := New()
 	err := config.ReadFile("config.ini")
