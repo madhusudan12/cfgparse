@@ -120,6 +120,7 @@ func (c *CfgParser) Parse(cfgFile *os.File) {
 			break
 		}
 		if len(buff) == 0 {
+			filePos++
 			continue
 		}
 		numOfBytes = len(buff)
@@ -242,12 +243,16 @@ func (c *CfgParser) AddSection(sectionName string) error {
 		return err
 	}
 	writer := bufio.NewWriter(f)
-	buff := "\n[" + sectionName + "]"
-	filePostion, err := f.Seek(2, 0)
+	//TODO: add two new lines only if last char in file is not '\n'
+	buff := "\n\n[" + sectionName + "]\n"
+	fileStat, err := f.Stat()
 	if err != nil {
-		panic("Something went wrong while accessing file")
+		errMesssage := fmt.Sprintf("Somthing went wrong while opening file %s. Check if is opened in other places", c.fileName)
+		err = errors.New(errMesssage)
+		return err
 	}
-	newSection.filePosition = filePostion + int64(len(buff)) + 1
+	filePosition := fileStat.Size()
+	newSection.filePosition = filePosition + int64(len(buff))
 	c.sections[newSection.name] = newSection
 	_, writerErr := writer.WriteString(buff)
 	if writerErr != nil {
@@ -290,11 +295,16 @@ func (c *CfgParser) Set(sectionName string, key string, value string) {
 	extraFileSize := fileSize - sectionPositon + 1
 	buffBytes := make([]byte, extraFileSize)
 	_ , err = fReader.ReadAt(buffBytes, sectionPositon)
-	if err!= io.EOF {
+	var remainingSlice string
+	if err != io.EOF {
 		errMessage := fmt.Sprintf("Error Reading the config file %v", err)
 		panic(errMessage)
 	}
-	remainingSlice := string(buffBytes)[:len(buffBytes)-1]
+	if len(buffBytes) == 0 {
+		remainingSlice = ""
+	} else {
+		remainingSlice = string(buffBytes)[:len(buffBytes)-1]
+	}
 	keyValueToWrite := key + c.delimeter + value
 	dataToWrite := keyValueToWrite + "\n" + remainingSlice
 	bytesToWrite := []byte(dataToWrite)
