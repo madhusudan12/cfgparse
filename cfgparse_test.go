@@ -46,19 +46,19 @@ func TestCfgParser_AddSection(t *testing.T) {
 
 func TestCfgParser_Set(t *testing.T) {
 	config := New()
+	var val string
 	err := config.ReadFile("config.ini")
 	if err != nil {
 		panic("Hey error while parsing file")
 	}
-	config.Set("newsection", "newkey2", "newvalue2")
-	val := config.Get("newsection2", "ggveg")
-	if val != "fjrhbfr" {
+	config.Set("newsection", "newkey", "newvalue")
+	val = config.Get("newsection", "newkey")
+	if val != "newvalue" {
 		t.Error("unable to get the value", val)
 	}
-	config.Set("newsection2", "sea1", "animal")
-
-	err = config.AddSection("newsection3")
-	if err != nil {
-		t.Error("Error adding section", err)
+	config.Set("addsection", "sea1", "animal")
+	val = config.Get("addsection", "sea1")
+	if val != "animal" {
+		t.Error("unable to get the value", val)
 	}
 }
